@@ -1,8 +1,8 @@
-import pyping
+from pythonping import ping
 import os
 import time
 from time import localtime, strftime
-from Tkinter import *
+from tkinter import *
 import threading
 from queue import Queue
 
@@ -33,11 +33,14 @@ class MainWindow:
 
 		self.onlineText = StringVar()
 		self.dnsText = StringVar()
+		self.wifiText = StringVar()
 		self.HBText = StringVar()
 		self.HBState = 1;
 
 		self.onlineText.set("Status sieci: NIEZNANY")
 		self.dnsText.set("Status DNS: NIEZNANY")
+		self.wifiText.set("Status WiFi: NIEZNANY")
+
 
 		self.hbLabel = Label(master, textvariable=self.HBText, justify=LEFT, anchor=W, font=("Helvetica", 16))
 		self.hbLabel.pack()
@@ -47,6 +50,9 @@ class MainWindow:
 
 		self.dnsStatus = Label(master, textvariable=self.dnsText, justify=LEFT, anchor=W, font=("Helvetica", 12))
 		self.dnsStatus.pack()
+
+		self.wifiStatus = Label(master, textvariable=self.wifiText, justify=LEFT, anchor=W, font=("Helvetica", 12))
+		self.wifiStatus.pack()
 
 		self.close_button = Button(master, text="Zamknij", command=master.quit)
 		self.close_button.pack()
@@ -67,6 +73,14 @@ class MainWindow:
 			self.dnsText.set("Status DNS: NIEUDANE ROZWIAZANIE DOMEN")
 			self.dnsStatus.configure(foreground="red")
 
+	def setWifiStatus(self, online):
+		if (online):
+			self.wifiText.set("Status WiFi: OK")
+			self.wifiStatus.configure(foreground="green4")
+		else:
+			self.wifiText.set("Status WiFi: NIEUDANE ROZWIAZANIE DOMEN")
+			self.wifiStatus.configure(foreground="red")		
+
 	def heartBeat(self):
 		self.HBText.set("*" * self.HBState)
 		self.HBState = self.HBState + 1
@@ -75,7 +89,7 @@ class MainWindow:
 
 
 def check(host):
-	return (pyping.ping(host).ret_code == 0)
+	return not "timed out" in ping(host, verbose=False, count=1)
 
 
 def isOnline():
@@ -85,7 +99,7 @@ def isOnline():
 			if (check(host)):
 				return True
 			on_main_thread(gui.heartBeat)
-	except Exception, e:
+	except Exception:
 		return False
 
 def dnsLive():
@@ -96,8 +110,19 @@ def dnsLive():
 				return True
 			on_main_thread(gui.heartBeat)
 		return False
-	except Exception, e:
+	except Exception:
 		return False
+
+def wifiUp():
+	hosts = ["192.168.0.1"]
+	try:
+		for host in hosts:
+			if (check(host)):
+				return True
+			on_main_thread(gui.heartBeat)
+		return False
+	except Exception:
+		return False	
 
 def myTime():
 	return strftime("%Y-%m-%d %H:%M:%S", localtime())
@@ -107,11 +132,14 @@ def addEntry(text):
 	with open(LOG_PATH, "a") as log:
 		log.write(entry)
 
-def writeSummary(starttime, endtime, sum, sumDNS):
+def writeSummary(starttime, endtime, sumWifi, sum, sumDNS):
 	with open(LOG_PATH, "a") as log:
 		log.write("============================ PODSUMOWANIE =============================\n")
 		log.write("Rozpoczecie monitoringu: " + starttime + "\n")
 		log.write("Zakonczenie monitoringu: " + endtime + "\n")
+		log.write("Przerwy w WiFi:\n")
+		for el in sumWifi:
+			log.write("\t * od " + el[0] + " do " + el[1] + "\n")
 		log.write("Przerwy w dostawie sieci:\n")
 		for el in sum:
 			log.write("\t * od " + el[0] + " do " + el[1] + "\n")
@@ -123,13 +151,24 @@ def writeSummary(starttime, endtime, sum, sumDNS):
 
 def onlineChecker():
 	startTime = myTime()
+	summaryOfflineWifi = []
 	summaryOffline = []
 	summaryOfflineDns = []
+	prevRouterFlag = True
 	prevNetworkState = True
 	prevDNSState = True
 	addEntry("Monitoring rozpoczety")
 	on_main_thread(gui.heartBeat)
-	while (not StopMarker):		
+	while (not StopMarker):
+		routerFlag = wifiUp()
+		if (routerFlag != prevRouterFlag):
+			if (routerFlag):
+				addEntry("Wznowiono polaczenie z routerem")
+				summaryOfflineWifi.append([lastOfflineWifi, myTime()])
+			else:
+				addEntry("Zerwano polaczenie z routerem")
+				lastOfflineWifi = myTime()
+
 		onlineFlag = isOnline()
 		if (onlineFlag != prevNetworkState):
 			if (onlineFlag):
@@ -147,17 +186,19 @@ def onlineChecker():
 		if (dnsFlag != prevDNSState):
 			if (dnsFlag):
 				addEntry("Wznowiono rozwiazywanie hostow")
-				summaryOfflineDns.append([lastOffline, myTime()])
+				summaryOfflineDns.append([lastOfflineDNS, myTime()])
 			else:
 				addEntry("Zerwano rozwiazywanie hostow")
 				lastOfflineDNS = myTime()
 
+		prevRouterFlag = routerFlag
 		prevNetworkState = onlineFlag
 		prevDNSState = dnsFlag
 		on_main_thread(gui.heartBeat)
 		on_main_thread(lambda: gui.setOnlineStatus(onlineFlag))
 		on_main_thread(lambda: gui.setDNSStatus(dnsFlag))
-	writeSummary(startTime, myTime(), summaryOffline, summaryOfflineDns)
+		on_main_thread(lambda: gui.setWifiStatus(prevRouterFlag))
+	writeSummary(startTime, myTime(), summaryOfflineWifi, summaryOffline, summaryOfflineDns)
 	addEntry("Monitoring zakonczony")
 
 gui = MainWindow(root)
